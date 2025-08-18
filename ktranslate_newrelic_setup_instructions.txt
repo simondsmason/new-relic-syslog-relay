@@ -1,0 +1,121 @@
+---
+KTranslate + Docker + New Relic Syslog Setup Guide
+---
+
+## Prerequisites
+- Windows or Linux machine with Docker installed
+- New Relic account (US region assumed)
+- Admin access to create API keys in New Relic
+
+## 1. Create a New Relic Ingest (LICENSE) API Key
+- Go to New Relic > API Keys UI: https://one.newrelic.com/api-keys
+- Click "Create a key"
+- Select **Ingest - LICENSE** as the key type
+- Name it (e.g., "Syslog Forwarder")
+- **Copy and save the full key immediately!**
+  - You will NOT be able to see the full key again after creation.
+  - The "Copy key" button for existing keys only copies the first 8 characters or a key ID, which is NOT usable for data ingest.
+- Note your New Relic **Account ID** (visible in the UI)
+
+## 2. Prepare the ktranslate Config File
+Create a file named `snmp-base.yaml` in your working directory with the following content:
+
+```
+devices:
+  syslog_collector:
+    device_name: syslog_collector
+    device_ip: 0.0.0.0
+    provider: kentik-syslog
+    syslog:
+      listen: 0.0.0.0:5143
+      protocol: udp
+trap: {}
+discovery: {}
+global:
+  poll_time_sec: 300
+  timeout_ms: 30000
+```
+
+- This configures ktranslate to listen for syslog on UDP port 5143 inside the container.
+
+## 3. Optional: Set Up Syslog Relay for Timezone Correction
+
+If your devices send syslog without timezone information (causing incorrect timestamps in New Relic), you can use a syslog-ng relay to fix this.
+
+### 3a. Edit syslog-ng Configuration
+The `syslog-ng.conf` file is already created. Edit the filter lines to match your actual device IPs:
+
+```
+# Replace with your actual device IPs
+filter f_unraid { 
+    host("unraid") or host("192.168.1.x"); # Replace with your Unraid IP
+};
+
+filter f_hubitat { 
+    host("hubitat") or host("192.168.1.y"); # Replace with your Hubitat IP
+};
+```
+
+### 3b. Run the Relay Setup Script
+```powershell
+./setup_syslog_relay.ps1
+```
+
+### 3c. Configure Devices for Relay
+- **Unraid:** Set syslog server to your host IP, port 513
+- **Hubitat:** Set syslog server to your host IP, port 513
+
+## 4. Run the ktranslate Docker Container
+Replace `YOUR_LICENSE_KEY` and `YOUR_ACCOUNT_ID` with your actual values:
+
+```
+docker run -d --name ktranslate-syslog \
+  --restart unless-stopped --pull=always \
+  -p 514:5143/udp \
+  -v "${PWD}/snmp-base.yaml:/snmp-base.yaml" \
+  -e NEW_RELIC_API_KEY=YOUR_LICENSE_KEY \
+  kentik/ktranslate:v2 \
+  -snmp /snmp-base.yaml \
+  -nr_account_id=YOUR_ACCOUNT_ID \
+  -tee_logs=true \
+  -service_name=syslog \
+  nr1.syslog
+```
+
+- This maps host UDP port 514 to container UDP port 5143, so you can send syslog to port 514 on your host.
+- The container will forward syslog messages to New Relic using your ingest key.
+
+## 5. Send Syslog Messages
+- Point your devices to send syslog to the IP of your Docker host, UDP port 514.
+- You can test locally with PowerShell:
+  ```powershell
+  $udpClient = New-Object System.Net.Sockets.UdpClient
+  $message = "<13>Jul 15 12:00:00 testhost Test syslog message from Windows"
+  $bytes = [System.Text.Encoding]::ASCII.GetBytes($message)
+  $udpClient.Send($bytes, $bytes.Length, "127.0.0.1", 514)
+  $udpClient.Close()
+  ```
+
+## 6. Check Logs and New Relic
+- To check container logs:
+  ```
+  docker logs ktranslate-syslog --tail 100
+  ```
+- Look for lines like:
+  - `New Relic sink connection confirmed good.`
+  - `Syslog Server ready on 0.0.0.0:5143`
+- In New Relic, check the Logs UI for incoming syslog data.
+
+## 7. Troubleshooting
+- If you see a 403 error in the logs, your API key is invalid, expired, or not of type "Ingest - LICENSE".
+- If you lose your key, you must generate a new one. You cannot retrieve the full key after creation.
+- Make sure your firewall allows UDP 514 to the Docker host.
+- If you change the config or key, remove the container and re-run the command.
+
+## 8. Security Notes
+- Treat your API key like a password. Do not share it or commit it to version control.
+- Rotate keys regularly and delete unused keys in the New Relic UI.
+
+---
+End of instructions.
+--- 

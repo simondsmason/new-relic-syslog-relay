@@ -1,0 +1,13 @@
+devices:
+  syslog_collector:
+    device_name: syslog_collector
+    device_ip: 0.0.0.0
+    provider: kentik-syslog
+    syslog:
+      listen: 0.0.0.0:514
+      protocol: udp
+trap: {}
+discovery: {}
+global:
+  poll_time_sec: 300
+  timeout_ms: 30000 
