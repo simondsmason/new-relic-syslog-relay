@@ -9,6 +9,7 @@ import tkinter as tk
 from tkinter import messagebox
 import pystray
 from PIL import Image, ImageDraw
+import os
 
 # Configuration
 LISTEN_PORT = 513
@@ -16,8 +17,9 @@ FORWARD_PORT = 514
 FORWARD_HOST = '127.0.0.1'
 
 # Version and changelog
-VERSION = "1.07"
+VERSION = "1.08"
 CHANGELOG = {
+    "1.08": "2025-08-03 - Add log file rotation to prevent unlimited log file growth",
     "1.07": "2025-08-03 - Add process ID to message format for better identification",
     "1.06": "2025-08-03 - Add device name to message format for better identification",
     "1.05": "2025-08-03 - Remove dash and space stripping post-processing for cleaner message display",
@@ -49,7 +51,8 @@ MAX_LOG_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_LOG_FILES = 5  # Keep 5 log files
 
 def create_tray_icon():
-    """Create a simple icon for the system tray"""
+    """Create a simple icon for th
+    e system tray"""
     # Create a simple icon (green circle)
     width = 64
     height = 64
@@ -57,6 +60,23 @@ def create_tray_icon():
     draw = ImageDraw.Draw(image)
     draw.ellipse([10, 10, width-10, height-10], fill='green', outline='darkgreen', width=2)
     return image
+
+def rotate_log_file():
+    """Rotate log file if it exceeds MAX_LOG_SIZE"""
+    if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > MAX_LOG_SIZE:
+        # Rotate existing backup files
+        for i in range(MAX_LOG_FILES - 1, 0, -1):
+            old_file = f"{LOG_FILE}.{i}"
+            new_file = f"{LOG_FILE}.{i + 1}"
+            if os.path.exists(old_file):
+                if i == MAX_LOG_FILES - 1:
+                    os.remove(old_file)  # Remove oldest
+                else:
+                    os.rename(old_file, new_file)
+        
+        # Rotate current log file
+        os.rename(LOG_FILE, f"{LOG_FILE}.1")
+        print(f"Log file rotated: {LOG_FILE} -> {LOG_FILE}.1")
 
 def adjust_timestamp(message, source_ip):
     """Adjust timestamp in syslog message based on source IP"""
@@ -104,8 +124,11 @@ def adjust_timestamp(message, source_ip):
                 print(f"  App name: {app_name}")
                 print(f"  Message content: {message_content}")
                 
+                # Rotate log file if needed
+                rotate_log_file()
+                
                 # Write debug info to log file
-                with open('syslog_relay.log', 'a', encoding='utf-8') as log_file:
+                with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
                     log_file.write(f"\n=== RFC 5424 PARSING DEBUG (v{VERSION}) ===\n")
                     log_file.write(f"Raw message: {message.strip()}\n")
                     log_file.write(f"Split into {len(parts)} parts:\n")
