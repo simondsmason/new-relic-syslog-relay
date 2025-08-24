@@ -17,8 +17,9 @@ FORWARD_PORT = 514
 FORWARD_HOST = '127.0.0.1'
 
 # Version and changelog
-VERSION = "1.08"
+VERSION = "1.09"
 CHANGELOG = {
+    "1.09": "2025-08-03 - Use Docker tag field as hostname for cleaner container identification",
     "1.08": "2025-08-03 - Add log file rotation to prevent unlimited log file growth",
     "1.07": "2025-08-03 - Add process ID to message format for better identification",
     "1.06": "2025-08-03 - Add device name to message format for better identification",
@@ -47,7 +48,7 @@ last_message_time = None
 
 # Log file configuration
 LOG_FILE = 'syslog_relay.log'
-MAX_LOG_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_LOG_SIZE = 1 * 1024 * 1024  # 1 MB (reduced from 10 MB for easier log review)
 MAX_LOG_FILES = 5  # Keep 5 log files
 
 def create_tray_icon():
@@ -141,17 +142,35 @@ def adjust_timestamp(message, source_ip):
                     log_file.write(f"  Message content: '{message_content}' (from parts[7])\n")
                     log_file.write(f"==========================================\n")
                 
+                # Check if this is a Docker message by looking for container ID pattern in hostname
+                # Docker container IDs are 12-character hex strings like "5183c0a146c0"
+                docker_tag = None
+                if re.match(r'^[a-f0-9]{12}$', hostname):
+                    # This is likely a Docker container ID
+                    # Map container IDs to friendly names
+                    docker_container_mapping = {
+                        '5183c0a146c0': 'immichFrame-All',  # Add more mappings as needed
+                    }
+                    if hostname in docker_container_mapping:
+                        docker_tag = docker_container_mapping[hostname]
+                        print(f"Detected Docker container {hostname}, using tag: {docker_tag}")
+                    else:
+                        print(f"Detected Docker container {hostname}, but no mapping found")
+                
                 # Clean up app_name by removing HTML tags
                 app_name_clean = re.sub(r'<[^>]+>', '', app_name)
                 
                 # Further clean app_name to remove special characters that might confuse ktranslate
                 app_name_clean = re.sub(r'[^\w\-\.]', '_', app_name_clean)
                 
+                # Use Docker tag as hostname if available, otherwise use original hostname
+                final_hostname = docker_tag if docker_tag else hostname
+                
                 # Create RFC 3164 format: <priority>timestamp hostname app-name: app-name (process-id) - message
                 # Use a format that ktranslate can properly parse
-                # Keep the original hostname (HubitatC8Pro, HubitatC7, etc.) and use app_name as the program name
-                # Add device name and process ID to the message for better identification
-                adjusted_message = f"{priority}{adjusted_timestamp} {hostname} {app_name_clean}: {app_name_clean} ({parts[4]}) - {message_content}"
+                # For Docker messages, use the tag as hostname for cleaner identification
+                # For other devices, keep the original hostname (HubitatC8Pro, HubitatC7, etc.)
+                adjusted_message = f"{priority}{adjusted_timestamp} {final_hostname} {app_name_clean}: {app_name_clean} ({parts[4]}) - {message_content}"
             else:
                 # Fallback to simple timestamp replacement if parsing fails
                 adjusted_message = re.sub(iso_pattern, f"{priority_part}{adjusted_timestamp}", message)
