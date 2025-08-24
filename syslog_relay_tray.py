@@ -17,8 +17,12 @@ FORWARD_PORT = 514
 FORWARD_HOST = '127.0.0.1'
 
 # Version and changelog
-VERSION = "1.11"
+VERSION = "1.15"
 CHANGELOG = {
+    "1.15": "2025-08-24 - Fix Home Assistant date stripping by making it independent of Docker container processing",
+    "1.14": "2025-08-24 - Add configurable IP list for date stripping and extend to Home Assistant messages",
+    "1.13": "2025-08-24 - Fix regex patterns in Docker date stripping to prevent hanging on complex messages",
+    "1.12": "2025-08-24 - Add Docker container superfluous date stripping for cleaner New Relic display",
     "1.11": "2025-08-24 - Add Docker container hostname transformation for Unraid messages (container[ID]: -> container [ID]:)",
     "1.10": "2025-08-24 - Add comprehensive logging for all incoming and outgoing messages regardless of format",
     "1.09": "2025-08-03 - Use Docker tag field as hostname for cleaner container identification",
@@ -27,20 +31,23 @@ CHANGELOG = {
     "1.06": "2025-08-03 - Add device name to message format for better identification",
     "1.05": "2025-08-03 - Remove dash and space stripping post-processing for cleaner message display",
     "1.04": "2025-08-03 - Fix RFC 5424 parsing to correctly assign hostname and app-name fields",
-    "1.03": "2025-08-03 - Add detailed debug logging to log file for RFC 5424 parsing",
-    "1.02": "2025-08-03 - Add timestamp adjustment for different time zones",
-    "1.01": "2025-08-03 - Initial version with basic syslog relay functionality"
+    "1.03": "2025-08-03 - Add detailed debug logging to log file for RFC 5424 parsing"
 }
 
-# Device IPs and their timezone offsets (in hours)
+# Device time zone offsets (hours to add to UTC)
 DEVICE_OFFSETS = {
-    '192.168.2.110': 5,  # Unraid: +5 hours
-    '192.168.2.108': 5,  # Hubitat: +5 hours (updated to match others)
-    '192.168.2.162': 5,  # Hubitat: +5 hours (updated to match others)
-    '192.168.2.19': 5,   # Hubitat: +5 hours (updated to match others)
-    '192.168.2.222': 5,  # Hubitat: +5 hours (updated to match others)
-    '192.168.2.113': 5,  # Home Assistant: +5 hours
+    "192.168.2.19": 5,   # HubitatC8Pro-2
+    "192.168.2.108": 5,  # HubitatC8Pro
+    "192.168.2.162": 5,  # HubitatC7
+    "192.168.2.110": 5,  # Unraid
+    "192.168.2.113": 5,  # Home Assistant
 }
+
+# IPs that need date stripping (Docker containers, Home Assistant, etc.)
+DATE_STRIP_IPS = [
+    "192.168.2.110",  # Unraid (Docker containers: frigate, immichFrame, etc.)
+    "192.168.2.113",  # Home Assistant (all addons and core)
+]
 
 # Global variables for status
 relay_running = False
@@ -111,6 +118,48 @@ def adjust_docker_hostname(message, source_ip):
         return re.sub(pattern, f'{container_name} [{container_id}]:', message)
     
     return message
+
+def strip_docker_dates(message, source_ip):
+    """Strip superfluous date information from Docker container and Home Assistant messages"""
+    # Only process messages from configured IPs
+    if source_ip not in DATE_STRIP_IPS:
+        return message
+    
+    try:
+        # Process Docker container dates (Unraid)
+        if source_ip == "192.168.2.110":
+            # Look for Docker container pattern to identify these messages
+            container_pattern = r'([a-zA-Z0-9_-]+)\s*\[([0-9]+)\]:'
+            if re.search(container_pattern, message):
+                # Pattern 1: Frigate ISO format with microseconds (2025-08-24 08:54:23.339023614)
+                # Use more specific pattern to avoid catastrophic backtracking
+                message = re.sub(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+', '', message)
+                
+                # Pattern 1b: Remove bracketed timestamps that might follow ([2025-08-24 08:54:23])
+                message = re.sub(r'\s*\[\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\]\s*', ' ', message)
+                
+                # Pattern 2: ImmichFrame short date format (25-08-24 08:54:24)
+                message = re.sub(r'\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+', '', message)
+        
+        # Process Home Assistant dates (independent check)
+        if source_ip == "192.168.2.113" and "homeassistant" in message:
+            # Pattern 1: Home Assistant ISO format with milliseconds (2025-08-24 17:56:26.257)
+            message = re.sub(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+', '', message)
+            
+            # Pattern 2: Home Assistant ISO format with comma-separated milliseconds (2025-08-24 17:57:52,121)
+            message = re.sub(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d+', '', message)
+            
+            # Pattern 3: Home Assistant ISO format with colon separator (2025-08-24 17:58:37:)
+            message = re.sub(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}:', '', message)
+        
+        # Clean up any double spaces that might result
+        message = re.sub(r'\s+', ' ', message)
+        
+        return message
+    except Exception as e:
+        # If regex processing fails, return original message
+        print(f"Warning: Date stripping failed for message: {e}")
+        return message
 
 def adjust_timestamp(message, source_ip):
     """Adjust timestamp in syslog message based on source IP"""
@@ -293,16 +342,19 @@ def relay_worker():
                 # Transform Docker hostname if needed
                 transformed_message = adjust_docker_hostname(adjusted_message, source_ip)
                 
+                # Strip Docker dates if needed
+                final_message = strip_docker_dates(transformed_message, source_ip)
+                
                 print(f"=== OUTGOING MESSAGE (v{VERSION}) ===")
-                print(f"Transformed message: {transformed_message}")
+                print(f"Transformed message: {final_message}")
                 print(f"Destination: {FORWARD_HOST}:{FORWARD_PORT}")
                 print(f"========================")
                 
                 # Forward to ktranslate
-                forward_sock.sendto(transformed_message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
+                forward_sock.sendto(final_message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
                 
                 # Log outgoing message
-                log_message_to_file("outgoing", source_ip, message, transformed_message)
+                log_message_to_file("outgoing", source_ip, message, final_message)
                 
             except socket.timeout:
                 # No message received, continue
