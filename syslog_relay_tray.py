@@ -17,8 +17,10 @@ FORWARD_PORT = 514
 FORWARD_HOST = '127.0.0.1'
 
 # Version and changelog
-VERSION = "1.09"
+VERSION = "1.11"
 CHANGELOG = {
+    "1.11": "2025-08-24 - Add Docker container hostname transformation for Unraid messages (container[ID]: -> container [ID]:)",
+    "1.10": "2025-08-24 - Add comprehensive logging for all incoming and outgoing messages regardless of format",
     "1.09": "2025-08-03 - Use Docker tag field as hostname for cleaner container identification",
     "1.08": "2025-08-03 - Add log file rotation to prevent unlimited log file growth",
     "1.07": "2025-08-03 - Add process ID to message format for better identification",
@@ -26,9 +28,8 @@ CHANGELOG = {
     "1.05": "2025-08-03 - Remove dash and space stripping post-processing for cleaner message display",
     "1.04": "2025-08-03 - Fix RFC 5424 parsing to correctly assign hostname and app-name fields",
     "1.03": "2025-08-03 - Add detailed debug logging to log file for RFC 5424 parsing",
-    "1.02": "2025-08-03 - Preserve original hostname in Hubitat RFC 5424 to RFC 3164 conversion",
-    "1.01": "2025-08-03 - Strip leading dash and space from Hubitat messages for cleaner New Relic display",
-    "1.00": "2025-07-26 - Initial version with detailed incoming/outgoing message logging"
+    "1.02": "2025-08-03 - Add timestamp adjustment for different time zones",
+    "1.01": "2025-08-03 - Initial version with basic syslog relay functionality"
 }
 
 # Device IPs and their timezone offsets (in hours)
@@ -78,6 +79,38 @@ def rotate_log_file():
         # Rotate current log file
         os.rename(LOG_FILE, f"{LOG_FILE}.1")
         print(f"Log file rotated: {LOG_FILE} -> {LOG_FILE}.1")
+
+def log_message_to_file(message_type, source_ip, message, transformed_message=None):
+    """Log all messages to the log file for debugging"""
+    rotate_log_file()
+    
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+    
+    with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+        log_file.write(f"\n=== {message_type.upper()} MESSAGE (v{VERSION}) - {timestamp} ===\n")
+        log_file.write(f"Source IP: {source_ip}\n")
+        log_file.write(f"Raw message: {message.strip()}\n")
+        if transformed_message:
+            log_file.write(f"Transformed message: {transformed_message.strip()}\n")
+        log_file.write(f"==========================================\n")
+
+def adjust_docker_hostname(message, source_ip):
+    """Transform Docker container hostnames for Unraid messages (container[ID]: -> container [ID]:)"""
+    # Only process Unraid messages
+    if source_ip != "192.168.2.110":
+        return message
+    
+    # Look for pattern: container[ID]: (Docker container format)
+    pattern = r'([a-zA-Z0-9_-]+)\[([0-9]+)\]:'
+    match = re.search(pattern, message)
+    
+    if match:
+        container_name = match.group(1)
+        container_id = match.group(2)
+        # Replace container[ID]: with container [ID]:
+        return re.sub(pattern, f'{container_name} [{container_id}]:', message)
+    
+    return message
 
 def adjust_timestamp(message, source_ip):
     """Adjust timestamp in syslog message based on source IP"""
@@ -251,18 +284,25 @@ def relay_worker():
                 print(f"Source IP: {source_ip}")
                 print(f"Raw message: {message.strip()}")
                 
+                # Log incoming message
+                log_message_to_file("incoming", source_ip, message)
+                
                 # Adjust timestamp if needed
                 adjusted_message = adjust_timestamp(message, source_ip)
                 
-
+                # Transform Docker hostname if needed
+                transformed_message = adjust_docker_hostname(adjusted_message, source_ip)
                 
                 print(f"=== OUTGOING MESSAGE (v{VERSION}) ===")
-                print(f"Transformed message: {adjusted_message}")
+                print(f"Transformed message: {transformed_message}")
                 print(f"Destination: {FORWARD_HOST}:{FORWARD_PORT}")
                 print(f"========================")
                 
                 # Forward to ktranslate
-                forward_sock.sendto(adjusted_message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
+                forward_sock.sendto(transformed_message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
+                
+                # Log outgoing message
+                log_message_to_file("outgoing", source_ip, message, transformed_message)
                 
             except socket.timeout:
                 # No message received, continue
