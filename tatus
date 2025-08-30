@@ -1,0 +1,5 @@
+[33m81f1cc5[m[33m ([m[1;36mHEAD -> [m[1;32mmain[m[33m, [m[1;31morigin/main[m[33m)[m v1.15: Fix Home Assistant date stripping by making it independent of Docker container processing
+[33m105bfa1[m v1.11: Add Docker container hostname transformation for Unraid messages (container[ID]: -> container [ID]:)
+[33m6549c6d[m Update to v1.09: Add Docker container mapping and improve log rotation
+[33mf1563bb[m Update to v1.08: Add log file rotation to prevent unlimited log growth
+[33m618885a[m Initial commit: New Relic Syslog Relay v1.07

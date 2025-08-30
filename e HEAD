@@ -1,0 +1,3 @@
+warning: in the working copy of 'start_syslog_relay.bat', LF will be replaced by CRLF the next time Git touches it
+start_syslog_relay.bat
+syslog_relay_tray.py

@@ -1,6 +1,6 @@
 @echo off
-title Syslog Relay v1.23
-echo Starting Syslog Relay v1.23...
+title Syslog Relay v1.27
+echo Starting Syslog Relay v1.27...
 echo.
 echo The relay will start in the system tray.
 echo Right-click the tray icon to stop the relay.

@@ -20,8 +20,12 @@ FORWARD_PORT = 514
 FORWARD_HOST = '127.0.0.1'
 
 # Version and changelog
-VERSION = "1.23"
+VERSION = "1.27"
 CHANGELOG = {
+    "1.27": "2025-01-27 - Fix timezone issue with UTC timestamps, remove pop-up dialogs, change Status to send health check",
+    "1.26": "2025-01-27 - Fix dialog window issues with proper tkinter implementation and improve local logging",
+    "1.25": "2025-01-27 - Fix dialog display issues by reverting to messagebox and improve left-click error handling",
+    "1.24": "2025-01-27 - Fix tkinter window management issues and add left-click support for tray icon",
     "1.23": "2025-01-27 - Fix startup message system stats collection and improve global variable handling",
     "1.22": "2025-01-27 - Fix system stats error handling to prevent monitoring worker crashes",
     "1.21": "2025-01-27 - Fix global variable declaration syntax error in on_clicked function",
@@ -484,7 +488,7 @@ def send_startup_message(forward_sock):
     """Send startup message to ktranslate via syslog"""
     try:
         priority = "<134>"  # Info level
-        timestamp = datetime.now().strftime("%b %d %H:%M:%S")
+        timestamp = datetime.utcnow().strftime("%b %d %H:%M:%S")
         hostname = "syslog-relay"
         app_name = "relay-startup"
         
@@ -538,7 +542,7 @@ def send_shutdown_message(forward_sock):
     """Send shutdown message to ktranslate via syslog"""
     try:
         priority = "<134>"  # Info level
-        timestamp = datetime.now().strftime("%b %d %H:%M:%S")
+        timestamp = datetime.utcnow().strftime("%b %d %H:%M:%S")
         hostname = "syslog-relay"
         app_name = "relay-shutdown"
         
@@ -599,7 +603,7 @@ def send_restart_message(forward_sock):
     """Send restart message to ktranslate via syslog"""
     try:
         priority = "<134>"  # Info level
-        timestamp = datetime.now().strftime("%b %d %H:%M:%S")
+        timestamp = datetime.utcnow().strftime("%b %d %H:%M:%S")
         hostname = "syslog-relay"
         app_name = "relay-restart"
         
@@ -660,7 +664,7 @@ def send_system_stats_to_ktranslate(stats, forward_sock):
     """Send system statistics to ktranslate via syslog"""
     try:
         priority = "<134>"  # Info level
-        timestamp = datetime.now().strftime("%b %d %H:%M:%S")
+        timestamp = datetime.utcnow().strftime("%b %d %H:%M:%S")
         hostname = "syslog-relay"
         app_name = "system-monitor"
         
@@ -789,22 +793,79 @@ def monitoring_worker():
     print("Monitoring worker shutting down")
     monitor_sock.close()
 
-def get_status_text():
-    """Get status text for tray icon"""
-    if not relay_running:
-        return f"Syslog Relay v{VERSION}: Stopped"
-    
-    status = f"Syslog Relay v{VERSION}: Running\nMessages: {message_count}"
-    if last_message_time:
-        status += f"\nLast: {last_message_time.strftime('%H:%M:%S')}"
-    return status
+def send_health_check_message(forward_sock):
+    """Send health check message to ktranslate via syslog"""
+    try:
+        priority = "<134>"  # Info level
+        timestamp = datetime.utcnow().strftime("%b %d %H:%M:%S")
+        hostname = "syslog-relay"
+        app_name = "relay-health-check"
+        
+        # Get current system stats
+        stats = get_system_stats()
+        
+        # Check if stats collection failed
+        if 'error' in stats:
+            # Use fallback values if stats collection failed
+            message_parts = [
+                f"Version:{VERSION}",
+                f"Platform:{platform.system()} {platform.release()}",
+                f"Python:{platform.python_version()}",
+                f"HealthCheck:{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"Memory:Unknown",
+                f"CPU:Unknown",
+                f"Messages:Unknown",
+                f"Status:Manual Check"
+            ]
+        else:
+            message_parts = [
+                f"Version:{VERSION}",
+                f"Platform:{platform.system()} {platform.release()}",
+                f"Python:{platform.python_version()}",
+                f"HealthCheck:{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"Memory:{stats.get('memory_percent', 'Unknown')}%({stats.get('memory_used_gb', 'Unknown')}GB/{stats.get('memory_total_gb', 'Unknown')}GB)",
+                f"CPU:{stats.get('cpu_percent', 'Unknown')}%",
+                f"Messages:{stats.get('total_messages', 'Unknown')}",
+                f"Status:Manual Check"
+            ]
+        
+        syslog_message = f"{priority}{timestamp} {hostname} {app_name}: {' | '.join(message_parts)}"
+        forward_sock.sendto(syslog_message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
+        print(f"Health check message sent to ktranslate: {syslog_message}")
+        
+        # Also log to file for debugging
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== HEALTH CHECK MESSAGE SENT (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"Message: {syslog_message}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
+            
+    except Exception as e:
+        error_msg = f"Error sending health check message to ktranslate: {e}"
+        print(error_msg)
+        # Log error to file
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== HEALTH CHECK MESSAGE ERROR (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"{error_msg}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
 
 def on_clicked(icon, item):
     """Handle tray icon clicks"""
     global relay_running
     
-    if str(item) == "Status":
-        messagebox.showinfo("Syslog Relay Status", get_status_text())
+    if str(item) == f"Status (v{VERSION})":
+        # Send health check message
+        try:
+            health_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_health_check_message(health_sock)
+            health_sock.close()
+        except Exception as e:
+            print(f"Error sending health check message: {e}")
     elif str(item) == "Stop":
         relay_running = False
         
@@ -853,8 +914,6 @@ def on_clicked(icon, item):
         # Start monitoring in background thread
         monitoring_thread = threading.Thread(target=monitoring_worker, daemon=True)
         monitoring_thread.start()
-        
-        messagebox.showinfo("Restart", "Syslog relay has been restarted successfully!")
 
 def main():
     # Start relay in background thread
@@ -879,9 +938,9 @@ def main():
     # Create tray icon
     icon_image = create_tray_icon()
     
-    # Create menu
+    # Create menu for right-click
     menu = pystray.Menu(
-        pystray.MenuItem("Status", on_clicked),
+        pystray.MenuItem(f"Status (v{VERSION})", on_clicked),
         pystray.MenuItem("Stop", on_clicked),
         pystray.MenuItem("Restart", on_clicked)
     )
