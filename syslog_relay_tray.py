@@ -20,8 +20,15 @@ FORWARD_PORT = 514
 FORWARD_HOST = '127.0.0.1'
 
 # Version and changelog
-VERSION = "1.16"
+VERSION = "1.23"
 CHANGELOG = {
+    "1.23": "2025-01-27 - Fix startup message system stats collection and improve global variable handling",
+    "1.22": "2025-01-27 - Fix system stats error handling to prevent monitoring worker crashes",
+    "1.21": "2025-01-27 - Fix global variable declaration syntax error in on_clicked function",
+    "1.20": "2025-01-27 - Add restart functionality with restart message and automatic startup message",
+    "1.19": "2025-01-27 - Move startup message to main function and add shutdown message when stopping relay",
+    "1.18": "2025-01-27 - Add immediate startup messages and improve monitoring worker reliability with startup notification",
+    "1.17": "2025-08-29 - Fix syslog-server message generation by resolving monitoring worker race condition and adding error logging",
     "1.16": "2025-08-24 - Add system monitoring that sends performance data to ktranslate only (no local file logging)",
     "1.15": "2025-08-24 - Fix Home Assistant date stripping by making it independent of Docker container processing",
     "1.14": "2025-08-24 - Add configurable IP list for date stripping and extend to Home Assistant messages",
@@ -407,23 +414,40 @@ def get_system_stats():
         # Get network stats
         network = psutil.net_io_counters()
         
-        # Get uptime
-        uptime = time.time() - start_time
+        # Get uptime - handle case where start_time might not be initialized
+        try:
+            uptime = time.time() - start_time
+        except NameError:
+            uptime = 0
         
-        # Calculate message rates
-        current_time = time.time()
-        if current_time - last_minute_time >= 60:
-            messages_per_minute = last_minute_messages
-            last_minute_messages = 0
-            last_minute_time = current_time
-        else:
-            messages_per_minute = last_minute_messages
+        # Calculate message rates - handle case where global variables might not be initialized
+        try:
+            current_time = time.time()
+            if current_time - last_minute_time >= 60:
+                messages_per_minute = last_minute_messages
+                last_minute_messages = 0
+                last_minute_time = current_time
+            else:
+                messages_per_minute = last_minute_messages
+        except NameError:
+            messages_per_minute = 0
         
         # Get active threads
         active_threads = threading.active_count()
         
         # Get garbage collection stats
         gc_stats = gc.get_stats()
+        
+        # Handle case where global variables might not be initialized
+        try:
+            total_messages = total_messages_processed
+        except NameError:
+            total_messages = 0
+        
+        try:
+            relay_status = relay_running
+        except NameError:
+            relay_status = False
         
         stats = {
             'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -443,10 +467,10 @@ def get_system_stats():
             'disk_percent': round((disk.used / disk.total) * 100, 2),
             'network_bytes_sent_mb': round(network.bytes_sent / (1024**2), 2),
             'network_bytes_recv_mb': round(network.bytes_recv / (1024**2), 2),
-            'total_messages': total_messages_processed,
+            'total_messages': total_messages,
             'messages_per_minute': messages_per_minute,
             'active_threads': active_threads,
-            'relay_running': relay_running,
+            'relay_running': relay_status,
             'gc_collections': len(gc_stats),
             'gc_objects_collected': sum(stat['collections'] for stat in gc_stats),
             'platform': platform.platform(),
@@ -456,6 +480,182 @@ def get_system_stats():
     except Exception as e:
         return {'error': f"Failed to collect system stats: {e}"}
 
+def send_startup_message(forward_sock):
+    """Send startup message to ktranslate via syslog"""
+    try:
+        priority = "<134>"  # Info level
+        timestamp = datetime.now().strftime("%b %d %H:%M:%S")
+        hostname = "syslog-relay"
+        app_name = "relay-startup"
+        
+        # Get basic system info directly without using get_system_stats()
+        try:
+            memory = psutil.virtual_memory()
+            cpu_percent = psutil.cpu_percent()
+            memory_info = f"{memory.percent}%({round(memory.used / (1024**3), 2)}GB/{round(memory.total / (1024**3), 2)}GB)"
+            cpu_info = f"{cpu_percent}%"
+        except Exception as e:
+            print(f"Error getting basic system stats: {e}")
+            memory_info = "Unknown"
+            cpu_info = "Unknown"
+        
+        message_parts = [
+            f"Version:{VERSION}",
+            f"Platform:{platform.system()} {platform.release()}",
+            f"Python:{platform.python_version()}",
+            f"Startup:{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            f"Memory:{memory_info}",
+            f"CPU:{cpu_info}",
+            f"Status:Starting"
+        ]
+        
+        syslog_message = f"{priority}{timestamp} {hostname} {app_name}: {' | '.join(message_parts)}"
+        forward_sock.sendto(syslog_message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
+        print(f"Startup message sent to ktranslate: {syslog_message}")
+        
+        # Also log to file for debugging
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== STARTUP MESSAGE SENT (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"Message: {syslog_message}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
+            
+    except Exception as e:
+        error_msg = f"Error sending startup message to ktranslate: {e}"
+        print(error_msg)
+        # Log error to file
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== STARTUP MESSAGE ERROR (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"{error_msg}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
+
+def send_shutdown_message(forward_sock):
+    """Send shutdown message to ktranslate via syslog"""
+    try:
+        priority = "<134>"  # Info level
+        timestamp = datetime.now().strftime("%b %d %H:%M:%S")
+        hostname = "syslog-relay"
+        app_name = "relay-shutdown"
+        
+        # Get basic system info for shutdown message
+        stats = get_system_stats()
+        
+        # Check if stats collection failed
+        if 'error' in stats:
+            # Use fallback values if stats collection failed
+            message_parts = [
+                f"Version:{VERSION}",
+                f"Platform:{platform.system()} {platform.release()}",
+                f"Python:{platform.python_version()}",
+                f"Shutdown:{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"Memory:Unknown",
+                f"CPU:Unknown",
+                f"Messages:Unknown",
+                f"Status:Stopping"
+            ]
+        else:
+            message_parts = [
+                f"Version:{VERSION}",
+                f"Platform:{platform.system()} {platform.release()}",
+                f"Python:{platform.python_version()}",
+                f"Shutdown:{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"Memory:{stats.get('memory_percent', 'Unknown')}%({stats.get('memory_used_gb', 'Unknown')}GB/{stats.get('memory_total_gb', 'Unknown')}GB)",
+                f"CPU:{stats.get('cpu_percent', 'Unknown')}%",
+                f"Messages:{stats.get('total_messages', 'Unknown')}",
+                f"Status:Stopping"
+            ]
+        
+        syslog_message = f"{priority}{timestamp} {hostname} {app_name}: {' | '.join(message_parts)}"
+        forward_sock.sendto(syslog_message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
+        print(f"Shutdown message sent to ktranslate: {syslog_message}")
+        
+        # Also log to file for debugging
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== SHUTDOWN MESSAGE SENT (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"Message: {syslog_message}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
+            
+    except Exception as e:
+        error_msg = f"Error sending shutdown message to ktranslate: {e}"
+        print(error_msg)
+        # Log error to file
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== SHUTDOWN MESSAGE ERROR (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"{error_msg}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
+
+def send_restart_message(forward_sock):
+    """Send restart message to ktranslate via syslog"""
+    try:
+        priority = "<134>"  # Info level
+        timestamp = datetime.now().strftime("%b %d %H:%M:%S")
+        hostname = "syslog-relay"
+        app_name = "relay-restart"
+        
+        # Get basic system info for restart message
+        stats = get_system_stats()
+        
+        # Check if stats collection failed
+        if 'error' in stats:
+            # Use fallback values if stats collection failed
+            message_parts = [
+                f"Version:{VERSION}",
+                f"Platform:{platform.system()} {platform.release()}",
+                f"Python:{platform.python_version()}",
+                f"Restart:{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"Memory:Unknown",
+                f"CPU:Unknown",
+                f"Messages:Unknown",
+                f"Status:Restarting"
+            ]
+        else:
+            message_parts = [
+                f"Version:{VERSION}",
+                f"Platform:{platform.system()} {platform.release()}",
+                f"Python:{platform.python_version()}",
+                f"Restart:{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                f"Memory:{stats.get('memory_percent', 'Unknown')}%({stats.get('memory_used_gb', 'Unknown')}GB/{stats.get('memory_total_gb', 'Unknown')}GB)",
+                f"CPU:{stats.get('cpu_percent', 'Unknown')}%",
+                f"Messages:{stats.get('total_messages', 'Unknown')}",
+                f"Status:Restarting"
+            ]
+        
+        syslog_message = f"{priority}{timestamp} {hostname} {app_name}: {' | '.join(message_parts)}"
+        forward_sock.sendto(syslog_message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
+        print(f"Restart message sent to ktranslate: {syslog_message}")
+        
+        # Also log to file for debugging
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== RESTART MESSAGE SENT (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"Message: {syslog_message}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
+            
+    except Exception as e:
+        error_msg = f"Error sending restart message to ktranslate: {e}"
+        print(error_msg)
+        # Log error to file
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== RESTART MESSAGE ERROR (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"{error_msg}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
+
 def send_system_stats_to_ktranslate(stats, forward_sock):
     """Send system statistics to ktranslate via syslog"""
     try:
@@ -464,32 +664,96 @@ def send_system_stats_to_ktranslate(stats, forward_sock):
         hostname = "syslog-relay"
         app_name = "system-monitor"
         
-        message_parts = [
-            f"Uptime:{stats['uptime_formatted']}",
-            f"Memory:{stats['memory_percent']}%({stats['memory_used_gb']}GB/{stats['memory_total_gb']}GB)",
-            f"Process:{stats['process_memory_mb']}MB",
-            f"CPU:{stats['cpu_percent']}%",
-            f"Disk:{stats['disk_percent']}%({stats['disk_used_gb']}GB/{stats['disk_total_gb']}GB)",
-            f"Messages:{stats['total_messages']}({stats['messages_per_minute']}/min)",
-            f"Threads:{stats['active_threads']}",
-            f"Relay:{'Running' if stats['relay_running'] else 'Stopped'}"
-        ]
+        # Check if stats collection failed
+        if 'error' in stats:
+            # Use fallback values if stats collection failed
+            message_parts = [
+                f"Uptime:Unknown",
+                f"Memory:Unknown",
+                f"Process:Unknown",
+                f"CPU:Unknown",
+                f"Disk:Unknown",
+                f"Messages:Unknown",
+                f"Threads:Unknown",
+                f"Relay:{'Running' if relay_running else 'Stopped'}"
+            ]
+        else:
+            message_parts = [
+                f"Uptime:{stats.get('uptime_formatted', 'Unknown')}",
+                f"Memory:{stats.get('memory_percent', 'Unknown')}%({stats.get('memory_used_gb', 'Unknown')}GB/{stats.get('memory_total_gb', 'Unknown')}GB)",
+                f"Process:{stats.get('process_memory_mb', 'Unknown')}MB",
+                f"CPU:{stats.get('cpu_percent', 'Unknown')}%",
+                f"Disk:{stats.get('disk_percent', 'Unknown')}%({stats.get('disk_used_gb', 'Unknown')}GB/{stats.get('disk_total_gb', 'Unknown')}GB)",
+                f"Messages:{stats.get('total_messages', 'Unknown')}({stats.get('messages_per_minute', 'Unknown')}/min)",
+                f"Threads:{stats.get('active_threads', 'Unknown')}",
+                f"Relay:{'Running' if stats.get('relay_running', relay_running) else 'Stopped'}"
+            ]
         
         syslog_message = f"{priority}{timestamp} {hostname} {app_name}: {' | '.join(message_parts)}"
         forward_sock.sendto(syslog_message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
         print(f"System stats sent to ktranslate: {syslog_message}")
+        
+        # Also log to file for debugging
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== SYSTEM STATS SENT (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"Message: {syslog_message}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
+            
     except Exception as e:
-        print(f"Error sending system stats to ktranslate: {e}")
+        error_msg = f"Error sending system stats to ktranslate: {e}"
+        print(error_msg)
+        # Log error to file
+        try:
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== SYSTEM STATS ERROR (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"{error_msg}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
 
 def monitoring_worker():
     """Background worker for periodic system monitoring"""
     global last_monitoring_time, total_messages_processed, last_minute_messages
     
+    print(f"Monitoring worker starting (v{VERSION})")
+    
     try:
         monitor_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        print("Monitoring socket created successfully")
     except Exception as e:
         print(f"Failed to create monitoring socket: {e}")
+        # Log to file if possible
+        try:
+            os.makedirs(DESKTOP_LOG_DIR, exist_ok=True)
+            with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                log_file.write(f"\n=== MONITORING WORKER ERROR (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                log_file.write(f"Failed to create monitoring socket: {e}\n")
+                log_file.write(f"==========================================\n")
+        except:
+            pass
         return
+    
+    # Wait for relay to be running before starting monitoring loop
+    wait_count = 0
+    while not relay_running and wait_count < 30:  # Wait up to 30 seconds
+        time.sleep(1)
+        wait_count += 1
+    
+    if not relay_running:
+        print("Monitoring worker exiting: relay not running after 30 seconds")
+        monitor_sock.close()
+        return
+    
+    print(f"Monitoring worker started successfully, relay_running={relay_running}")
+    
+    # Send first system stats message immediately
+    print("Sending initial system stats...")
+    stats = get_system_stats()
+    send_system_stats_to_ktranslate(stats, monitor_sock)
+    last_monitoring_time = time.time()  # Reset timer for next 60-second interval
     
     while relay_running:
         try:
@@ -510,9 +774,19 @@ def monitoring_worker():
             time.sleep(10)  # Check every 10 seconds
             
         except Exception as e:
-            print(f"Error in monitoring worker: {e}")
+            error_msg = f"Error in monitoring worker: {e}"
+            print(error_msg)
+            # Log error to file
+            try:
+                with open(LOG_FILE, 'a', encoding='utf-8') as log_file:
+                    log_file.write(f"\n=== MONITORING WORKER ERROR (v{VERSION}) - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} ===\n")
+                    log_file.write(f"{error_msg}\n")
+                    log_file.write(f"==========================================\n")
+            except:
+                pass
             time.sleep(30)  # Wait longer on error
     
+    print("Monitoring worker shutting down")
     monitor_sock.close()
 
 def get_status_text():
@@ -527,20 +801,76 @@ def get_status_text():
 
 def on_clicked(icon, item):
     """Handle tray icon clicks"""
+    global relay_running
+    
     if str(item) == "Status":
         messagebox.showinfo("Syslog Relay Status", get_status_text())
     elif str(item) == "Stop":
-        global relay_running
         relay_running = False
+        
+        # Send shutdown message before stopping
+        try:
+            shutdown_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_shutdown_message(shutdown_sock)
+            shutdown_sock.close()
+        except Exception as e:
+            print(f"Error sending shutdown message: {e}")
+        
         icon.stop()
     elif str(item) == "Restart":
-        # Restart functionality could be added here
-        messagebox.showinfo("Restart", "Please restart the application to restart the relay")
+        # Send restart message
+        try:
+            restart_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_restart_message(restart_sock)
+            restart_sock.close()
+        except Exception as e:
+            print(f"Error sending restart message: {e}")
+        
+        # Stop the current relay
+        relay_running = False
+        
+        # Wait a moment for cleanup
+        time.sleep(1)
+        
+        # Restart the relay
+        relay_running = True
+        
+        # Start relay in background thread
+        relay_thread = threading.Thread(target=relay_worker, daemon=True)
+        relay_thread.start()
+        
+        # Give relay worker time to set relay_running = True before starting monitoring
+        time.sleep(2)
+        
+        # Send startup message
+        try:
+            startup_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            send_startup_message(startup_sock)
+            startup_sock.close()
+        except Exception as e:
+            print(f"Error sending startup message: {e}")
+        
+        # Start monitoring in background thread
+        monitoring_thread = threading.Thread(target=monitoring_worker, daemon=True)
+        monitoring_thread.start()
+        
+        messagebox.showinfo("Restart", "Syslog relay has been restarted successfully!")
 
 def main():
     # Start relay in background thread
     relay_thread = threading.Thread(target=relay_worker, daemon=True)
     relay_thread.start()
+    
+    # Give relay worker time to set relay_running = True before starting monitoring
+    time.sleep(2)
+    
+    # Send startup message immediately
+    try:
+        startup_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        send_startup_message(startup_sock)
+        startup_sock.close()
+    except Exception as e:
+        print(f"Error sending startup message: {e}")
     
     # Start monitoring in background thread
     monitoring_thread = threading.Thread(target=monitoring_worker, daemon=True)
