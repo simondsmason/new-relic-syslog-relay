@@ -18,7 +18,7 @@
 
 /* Notes
 
-2025-01-27 - Simon Mason
+2025-10-05 - Simon Mason
   - Version 2.03: Added DST auto-detection with configuration switch to handle New Relic timezone parsing issues
 
 2025-08-30 - Simon Mason

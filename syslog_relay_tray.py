@@ -31,9 +31,9 @@ SYSLOG_RELAY_PORT = 513
 # Version and changelog
 VERSION = "1.32"
 CHANGELOG = {
-    "1.32": "2025-01-27 - Remove HUBITAT_TIMEZONE_OFFSET_FIX as timezone handling moved to Hubitat driver with DST auto-detection",
-    "1.31": "2025-01-27 - Add HUBITAT_TIMEZONE_OFFSET_FIX to adjust RFC 5424 timezone offset from -04:00 to -03:00 for Hubitat messages to fix New Relic timestamp display",
-    "1.30": "2025-01-27 - Add HUBITAT_DUAL_SEND_MODE to send both converted RFC 3164 and original RFC 5424 messages for proper app_name field parsing in New Relic",
+    "1.32": "2025-10-05 - Remove HUBITAT_TIMEZONE_OFFSET_FIX as timezone handling moved to Hubitat driver with DST auto-detection",
+    "1.31": "2025-10-05 - Add HUBITAT_TIMEZONE_OFFSET_FIX to adjust RFC 5424 timezone offset from -04:00 to -03:00 for Hubitat messages to fix New Relic timestamp display",
+    "1.30": "2025-10-05 - Add HUBITAT_DUAL_SEND_MODE to send both converted RFC 3164 and original RFC 5424 messages for proper app_name field parsing in New Relic",
     "1.29": "2025-01-27 - Fix hostname-based matching logic to properly handle external devices with dynamic IPs",
     "1.28": "2025-01-27 - Add hostname-based timezone matching for external devices with dynamic IPs",
     "1.27": "2025-01-27 - Fix timezone issue with UTC timestamps, remove pop-up dialogs, change Status to send health check",
