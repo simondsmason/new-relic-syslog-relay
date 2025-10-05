@@ -18,6 +18,9 @@
 
 /* Notes
 
+2025-01-27 - Simon Mason
+  - Version 2.02: Added testMessage command for testing syslog pipeline and New Relic display
+
 2025-08-30 - Simon Mason
   - Version 2.01: Added destination logging to debug messages
   - Version 2.0: Updated author and namespace
@@ -43,6 +46,7 @@ metadata {
 
         command "connect"
         command "disconnect"
+        command "testMessage", ["string"]
 
         attribute "status", "string"
     }
@@ -163,6 +167,35 @@ void disconnect() {
 
 void uninstalled() {
     disconnect()
+}
+
+void testMessage(String message) {
+    if (logEnable) log.debug "testMessage() called with: ${message}"
+    
+    if(ip != null) {
+        // Create a custom RFC 5424 test message
+        def timestamp = new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", location.timeZone)
+        def testMessage = "TEST_MESSAGE_${message}"
+        def procid = "9999"  // Special process ID for test messages
+        
+        // Use same priority as info messages
+        def priority = 8 + 6  // facility 1 + severity 6 (info)
+        
+        // Create RFC 5424 format message
+        def constructedString = "<${priority}>1 ${timestamp} ${hostname} ${testMessage} ${procid} - - Test message: ${message}"
+        
+        if (logEnable) log.debug "Sending test message via ${udptcp} to ${ip}:${port}: ${constructedString}"
+        
+        if (udptcp == 'UDP') {
+            sendHubCommand(new HubAction(constructedString, Protocol.LAN, [destinationAddress: "${ip}:${port}", type: HubAction.Type.LAN_TYPE_UDPCLIENT, ignoreResponse:true]))
+        } else {
+            sendHubCommand(new HubAction(constructedString, Protocol.RAW_LAN, [destinationAddress: "${ip}:${port}", type: HubAction.Type.LAN_TYPE_RAW]))
+        }
+        
+        log.info "Test message sent: ${message}"
+    } else {
+        log.warn "No syslog Server IP is set for test message"
+    }
 }
 
 void initialize() {
