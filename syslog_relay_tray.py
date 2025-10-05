@@ -70,7 +70,6 @@ DEVICE_OFFSETS = {
     "192.168.2.108": 5,  # HubitatC8Pro
     "192.168.2.162": 5,  # HubitatC7
     "192.168.2.222": 5,  # HubitatC8-2
-    "24.60.231.17": 5,   # ShoreC8
     "192.168.2.110": 5,  # Unraid
     "192.168.2.113": 5,  # Home Assistant
 }
@@ -78,6 +77,7 @@ DEVICE_OFFSETS = {
 # Hostname-based timezone offsets for external devices with dynamic IPs
 HOSTNAME_OFFSETS = {
     "HubitatC5": 5,      # External Hubitat C5 (dynamic IP)
+    "ShoreC8": 5,        # ShoreC8 (dynamic IP)
     # Add more external devices here as needed
 }
 
@@ -155,9 +155,17 @@ def log_message_to_file(message_type, source_ip, message, transformed_message=No
 
 def is_hubitat_rfc5424_message(message, source_ip):
     """Check if message is a Hubitat RFC 5424 message that should be sent in dual mode"""
-    # Check if it's from a Hubitat device
+    # Check if it's from a Hubitat device (IP-based or hostname-based)
     if source_ip not in DEVICE_OFFSETS:
-        return False
+        # Check hostname-based matching for external devices with dynamic IPs
+        rfc5424_pattern = r'<[0-9]+>1\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}\s+([^\s]+)'
+        match = re.search(rfc5424_pattern, message)
+        if match:
+            hostname = match.group(1)
+            if hostname not in HOSTNAME_OFFSETS:
+                return False
+        else:
+            return False
     
     # Check if it's RFC 5424 format (contains version "1" after priority)
     rfc5424_pattern = r'<[0-9]+>1\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}'
