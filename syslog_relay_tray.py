@@ -69,6 +69,8 @@ DEVICE_OFFSETS = {
     "192.168.2.19": 5,   # HubitatC8Pro-2
     "192.168.2.108": 5,  # HubitatC8Pro
     "192.168.2.162": 5,  # HubitatC7
+    "192.168.2.222": 5,  # HubitatC8-2
+    "24.60.231.17": 5,   # ShoreC8
     "192.168.2.110": 5,  # Unraid
     "192.168.2.113": 5,  # Home Assistant
 }
