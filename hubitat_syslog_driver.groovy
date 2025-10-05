@@ -19,7 +19,7 @@
 /* Notes
 
 2025-01-27 - Simon Mason
-  - Version 2.02: Added testMessage command for testing syslog pipeline and New Relic display
+  - Version 2.03: Added DST auto-detection with configuration switch to handle New Relic timezone parsing issues
 
 2025-08-30 - Simon Mason
   - Version 2.01: Added destination logging to debug messages
@@ -56,6 +56,7 @@ metadata {
         input("port", "number", title: "Syslog IP Port", description: "syslog port", defaultValue: 514, required: true)
         input("udptcp", "enum", title: "UDP or TCP?", description: "", defaultValue: "UDP", options: ["UDP","TCP"])
         input("hostname", "text", title: "Hub Hostname", description: "hostname of the hub; leave empty for IP address")
+        input("adjustForNewRelic", "bool", title: "Adjust timezone for New Relic", description: "Send -05:00 year-round to fix New Relic RFC 5424 timezone parsing", defaultValue: true)
         input("logEnable", "bool", title: "Enable debug logging", description: "", defaultValue: false)
     }
 }
@@ -122,8 +123,9 @@ void parse(String description) {
         def dateFormat = "yyyy-MM-dd HH:mm:ss.SSS"
         def date = Date.parse(dateFormat, descData.time)
         
-        // location timeZone comes from the geolocation of the hub. It's possible it's not set?
-        def isoDate = date.format("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", location.timeZone)
+        // Get timezone offset based on New Relic adjustment setting
+        def timezoneOffset = getTimezoneOffset()
+        def isoDate = date.format("yyyy-MM-dd'T'HH:mm:ss.SSS", location.timeZone) + timezoneOffset
         if (logEnable && !self) log.debug "Time we get = ${descData.time}; time we want ${isoDate}"
         
         //Get some data ready for the syslog message
@@ -174,7 +176,8 @@ void testMessage(String message) {
     
     if(ip != null) {
         // Create a custom RFC 5424 test message
-        def timestamp = new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSSXXX", location.timeZone)
+        def timezoneOffset = getTimezoneOffset()
+        def timestamp = new Date().format("yyyy-MM-dd'T'HH:mm:ss.SSS", location.timeZone) + timezoneOffset
         def testMessage = "TEST_MESSAGE_${message}"
         def procid = "9999"  // Special process ID for test messages
         
@@ -249,6 +252,19 @@ void webSocketStatus(String message) {
     }
 }
 
+private String getTimezoneOffset() {
+    if (adjustForNewRelic) {
+        // Send -05:00 year-round to fix New Relic RFC 5424 timezone parsing
+        return "-05:00"
+    } else {
+        // Use Hubitat's actual timezone (handles DST automatically)
+        def now = new Date()
+        def formatter = new java.text.SimpleDateFormat("XXX")
+        formatter.timeZone = location.timeZone
+        return formatter.format(now)
+    }
+}
+
 private String escapeStringHTMLforMsg(String str) {
     if (str) {
         str = str.replaceAll("&amp;", "&")
@@ -258,7 +274,7 @@ private String escapeStringHTMLforMsg(String str) {
         str = str.replaceAll("&#039;", "'") 
         str = str.replaceAll("&apos;", "'")
         str = str.replaceAll("&quot;", '"')
-		str = str.replaceAll("&nbsp;", " ")
+	str = str.replaceAll("&nbsp;", " ")
         //Strip HTML Span Tags
         str = str.replaceAll(/<\/?span.*?>/, "")
     }
