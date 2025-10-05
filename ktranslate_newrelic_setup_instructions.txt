@@ -64,6 +64,9 @@ filter f_hubitat {
 ### 3c. Configure Devices for Relay
 - **Unraid:** Set syslog server to your host IP, port 513
 - **Hubitat:** Set syslog server to your host IP, port 513
+- **Docker Containers:** Add to additional parameters: `--log-driver=syslog --log-opt syslog-address=udp://192.168.2.70:513 --log-opt tag="container-name"`
+
+**Syslog Relay Server:** `192.168.2.70:513`
 
 ## 4. Run the ktranslate Docker Container
 Replace `YOUR_LICENSE_KEY` and `YOUR_ACCOUNT_ID` with your actual values:

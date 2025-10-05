@@ -81,8 +81,13 @@ DEVICE_OFFSETS = {
 To forward Docker container logs, add this to your Docker run command:
 
 ```bash
---log-driver=syslog --log-opt syslog-address=udp://YOUR_SERVER_IP:513 --log-opt tag="{{.Name}}"
+--log-driver=syslog --log-opt syslog-address=udp://192.168.2.70:513 --log-opt tag="{{.Name}}"
 ```
+
+**Syslog Relay Server:** `192.168.2.70:513`
+- This is the IP address where the syslog relay is running
+- All Docker containers and devices should send syslog to this address
+- The relay forwards messages to ktranslate on port 514 for New Relic ingestion
 
 ## Usage
 

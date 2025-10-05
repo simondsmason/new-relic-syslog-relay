@@ -19,9 +19,17 @@ LISTEN_PORT = 513
 FORWARD_PORT = 514
 FORWARD_HOST = '127.0.0.1'
 
+# Syslog Relay Server Information
+# This is the IP address where the syslog relay is running
+# Use this IP for configuring Docker containers and devices to send syslog
+SYSLOG_RELAY_IP = "192.168.2.70"
+SYSLOG_RELAY_PORT = 513
+
 # Version and changelog
-VERSION = "1.27"
+VERSION = "1.29"
 CHANGELOG = {
+    "1.29": "2025-01-27 - Fix hostname-based matching logic to properly handle external devices with dynamic IPs",
+    "1.28": "2025-01-27 - Add hostname-based timezone matching for external devices with dynamic IPs",
     "1.27": "2025-01-27 - Fix timezone issue with UTC timestamps, remove pop-up dialogs, change Status to send health check",
     "1.26": "2025-01-27 - Fix dialog window issues with proper tkinter implementation and improve local logging",
     "1.25": "2025-01-27 - Fix dialog display issues by reverting to messagebox and improve left-click error handling",
@@ -50,12 +58,19 @@ CHANGELOG = {
 }
 
 # Device time zone offsets (hours to add to UTC)
+# Internal devices with static IPs - use IP-based matching
 DEVICE_OFFSETS = {
     "192.168.2.19": 5,   # HubitatC8Pro-2
     "192.168.2.108": 5,  # HubitatC8Pro
     "192.168.2.162": 5,  # HubitatC7
     "192.168.2.110": 5,  # Unraid
     "192.168.2.113": 5,  # Home Assistant
+}
+
+# Hostname-based timezone offsets for external devices with dynamic IPs
+HOSTNAME_OFFSETS = {
+    "HubitatC5": 5,      # External Hubitat C5 (dynamic IP)
+    # Add more external devices here as needed
 }
 
 # IPs that need date stripping (Docker containers, Home Assistant, etc.)
@@ -191,13 +206,32 @@ def strip_docker_dates(message, source_ip):
         return message
 
 def adjust_timestamp(message, source_ip):
-    """Adjust timestamp in syslog message based on source IP"""
+    """Adjust timestamp in syslog message based on source IP or hostname"""
     global message_count, last_message_time
     
-    if source_ip not in DEVICE_OFFSETS:
-        return message
-    
-    offset_hours = DEVICE_OFFSETS[source_ip]
+    # First, check if IP is in DEVICE_OFFSETS (standard IP-based matching)
+    if source_ip in DEVICE_OFFSETS:
+        offset_hours = DEVICE_OFFSETS[source_ip]
+        print(f"Using IP-based offset for {source_ip}: {offset_hours} hours")
+    else:
+        # IP not found in DEVICE_OFFSETS, try hostname-based matching for external devices
+        # Extract hostname from the message for external devices with dynamic IPs
+        # Look for RFC 5424 format: <priority>1 timestamp hostname app-name ...
+        rfc5424_pattern = r'<[0-9]+>1\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}\s+([^\s]+)'
+        match = re.search(rfc5424_pattern, message)
+        if match:
+            hostname = match.group(1)
+            if hostname in HOSTNAME_OFFSETS:
+                offset_hours = HOSTNAME_OFFSETS[hostname]
+                print(f"Using hostname-based offset for {hostname} (IP: {source_ip}): {offset_hours} hours")
+            else:
+                # No hostname match found, return original message unchanged
+                print(f"No hostname match for {hostname} (IP: {source_ip}), no processing needed")
+                return message
+        else:
+            # Could not extract hostname, return original message unchanged
+            print(f"Could not extract hostname from message (IP: {source_ip}), no processing needed")
+            return message
     
     # Try ISO 8601 format first (Hubitat format): <priority>1 YYYY-MM-DDTHH:MM:SS.mmm±HH:MM
     iso_pattern = r'(<[0-9]+>1\s+)(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2})'
