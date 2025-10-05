@@ -69,28 +69,61 @@ The "Status" option in the tray menu doesn't show visual feedback. It:
 
 This is working as designed - no popup or console output is shown.
 
-## Version Updates and Local Folder Management
+## Version Updates and Deployment Workflow
 
-**IMPORTANT:** When creating new versions of the relay, remember to update the local execution folder:
+**IMPORTANT:** The relay uses a two-folder system:
 
 **Working Folder:** `C:\Users\simon\iCloudDrive\Documents\HA\Hubitat Code\Cursor Repositories\New Relic - Syslog\`
+- Source code storage and version control
+- All development and changes happen here
+
 **Execution Folder:** `C:\Users\simon\Desktop\Syslog Relay\`
+- Where the relay actually runs from
+- Must be updated for changes to take effect
 
-**Required Steps for Each Version Update:**
-1. Update the code in the working folder (iCloudDrive)
-2. Update version number in `syslog_relay_tray.py` (VERSION variable)
-3. Update version number in `start_syslog_relay.bat` (title and echo messages)
-4. Add changelog entry for the new version
-5. **Copy updated files to execution folder:**
+**Complete Deployment Process:**
+1. **Update the code** in the working folder (iCloudDrive)
+2. **Update version number** in `syslog_relay_tray.py` (VERSION variable)
+3. **Update version number** in `start_syslog_relay.bat` (title and echo messages)
+4. **Add changelog entry** for the new version in `CHANGELOG` dictionary
+5. **Commit changes to git:**
    ```powershell
-   Copy-Item "syslog_relay_tray.py" "C:\Users\simon\Desktop\Syslog Relay\syslog_relay_tray.py" -Force
-   Copy-Item "start_syslog_relay.bat" "C:\Users\simon\Desktop\Syslog Relay\start_syslog_relay.bat" -Force
+   git add .
+   git commit -m "Version X.XX: Description of changes"
+   git push origin main
    ```
+6. **Deploy to execution folder:**
+   ```powershell
+   .\deploy_to_desktop.ps1
+   ```
+7. **Restart the relay** to run the new version
 
-**Why This Matters:**
-- The relay runs from the execution folder (Desktop)
-- Changes made in the working folder (iCloudDrive) don't automatically apply
-- The execution folder must be manually updated for changes to take effect
+**Why This Two-Folder System:**
+- iCloudDrive folder provides version control and backup
+- Desktop folder provides better performance for running applications
+- Changes don't automatically apply - must be deployed
+- The deployment script automates the copy process
+
+**Note:** The GitHub README.md contains the changelog, not this notes file.
+
+## Hubitat Dual Send Mode (Version 1.30+)
+
+**Purpose:** Send both converted RFC 3164 and original RFC 5424 messages for Hubitat devices to solve the `app_name` field parsing issue in New Relic.
+
+**Configuration:** `HUBITAT_DUAL_SEND_MODE = True` in `syslog_relay_tray.py`
+
+**How It Works:**
+- For Hubitat RFC 5424 messages only (detected by `is_hubitat_rfc5424_message()`)
+- Sends converted RFC 3164 message (existing behavior for timestamp display)
+- Sends original RFC 5424 message (new behavior for proper `app_name` field parsing)
+- Other devices (Docker, etc.) are unaffected
+
+**Result in New Relic:**
+- Two entries for each Hubitat message:
+  1. Converted RFC 3164: `HVAC_.Conservatory.Floor.Second.Sensor: HVAC_.Conservatory.Floor.Second.Sensor (7523) - HVAC: Conservatory Floor...`
+  2. Original RFC 5424: `HVAC_.Conservatory.Floor.Second.Sensor` (proper `app_name` field)
+
+**Logging:** Dual send messages are logged as "hubitat_dual_send_original" in the log files.
 
 ## Syslog Message Format Processing
 

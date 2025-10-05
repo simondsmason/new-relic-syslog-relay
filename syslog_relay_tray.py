@@ -19,6 +19,9 @@ LISTEN_PORT = 513
 FORWARD_PORT = 514
 FORWARD_HOST = '127.0.0.1'
 
+# Hubitat Dual Send Mode - send both converted and original messages
+HUBITAT_DUAL_SEND_MODE = True  # Set to True to send both converted and original Hubitat RFC 5424 messages
+
 # Syslog Relay Server Information
 # This is the IP address where the syslog relay is running
 # Use this IP for configuring Docker containers and devices to send syslog
@@ -26,8 +29,9 @@ SYSLOG_RELAY_IP = "192.168.2.70"
 SYSLOG_RELAY_PORT = 513
 
 # Version and changelog
-VERSION = "1.29"
+VERSION = "1.30"
 CHANGELOG = {
+    "1.30": "2025-01-27 - Add HUBITAT_DUAL_SEND_MODE to send both converted RFC 3164 and original RFC 5424 messages for proper app_name field parsing in New Relic",
     "1.29": "2025-01-27 - Fix hostname-based matching logic to properly handle external devices with dynamic IPs",
     "1.28": "2025-01-27 - Add hostname-based timezone matching for external devices with dynamic IPs",
     "1.27": "2025-01-27 - Fix timezone issue with UTC timestamps, remove pop-up dialogs, change Status to send health check",
@@ -144,6 +148,16 @@ def log_message_to_file(message_type, source_ip, message, transformed_message=No
         if transformed_message:
             log_file.write(f"Transformed message: {transformed_message.strip()}\n")
         log_file.write(f"==========================================\n")
+
+def is_hubitat_rfc5424_message(message, source_ip):
+    """Check if message is a Hubitat RFC 5424 message that should be sent in dual mode"""
+    # Check if it's from a Hubitat device
+    if source_ip not in DEVICE_OFFSETS:
+        return False
+    
+    # Check if it's RFC 5424 format (contains version "1" after priority)
+    rfc5424_pattern = r'<[0-9]+>1\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}'
+    return bool(re.search(rfc5424_pattern, message))
 
 def adjust_docker_hostname(message, source_ip):
     """Transform Docker container hostnames for Unraid messages (container[ID]: -> container [ID]:)"""
@@ -416,8 +430,21 @@ def relay_worker():
                 # Forward to ktranslate
                 forward_sock.sendto(final_message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
                 
+                # NEW: Send original RFC 5424 message for Hubitat devices only (if enabled)
+                if HUBITAT_DUAL_SEND_MODE and is_hubitat_rfc5424_message(message, source_ip):
+                    # Only send original if it's a Hubitat RFC 5424 message
+                    forward_sock.sendto(message.encode('utf-8'), (FORWARD_HOST, FORWARD_PORT))
+                    print(f"=== HUBITAT DUAL SEND: ORIGINAL RFC 5424 (v{VERSION}) ===")
+                    print(f"Original message: {message.strip()}")
+                    print(f"Destination: {FORWARD_HOST}:{FORWARD_PORT}")
+                    print(f"========================")
+                
                 # Log outgoing message
                 log_message_to_file("outgoing", source_ip, message, final_message)
+                
+                # NEW: Log Hubitat dual send if enabled
+                if HUBITAT_DUAL_SEND_MODE and is_hubitat_rfc5424_message(message, source_ip):
+                    log_message_to_file("hubitat_dual_send_original", source_ip, message)
                 
             except socket.timeout:
                 # No message received, continue
