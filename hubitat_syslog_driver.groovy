@@ -20,6 +20,7 @@
 
 2025-10-05 - Simon Mason
   - Version 2.03: Added DST auto-detection with configuration switch to handle New Relic timezone parsing issues
+  - Version 2.02: Added testMessage command for testing syslog functionality
 
 2025-08-30 - Simon Mason
   - Version 2.01: Added destination logging to debug messages
