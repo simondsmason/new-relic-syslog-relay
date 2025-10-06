@@ -28,8 +28,9 @@ SYSLOG_RELAY_IP = "192.168.2.70"
 SYSLOG_RELAY_PORT = 513
 
 # Version and changelog
-VERSION = "1.33"
+VERSION = "1.34"
 CHANGELOG = {
+    "1.34": "2025-10-05 - Simplify relay logic: pass through all RFC 5424 messages unchanged, only convert Unraid RFC 3164 messages",
     "1.33": "2025-10-05 - Remove dual-send mode and RFC 3164 conversion for Hubitat messages, keep only RFC 5424 processing",
     "1.32": "2025-10-05 - Remove HUBITAT_TIMEZONE_OFFSET_FIX as timezone handling moved to Hubitat driver with DST auto-detection",
     "1.31": "2025-10-05 - Add HUBITAT_TIMEZONE_OFFSET_FIX to adjust RFC 5424 timezone offset from -04:00 to -03:00 for Hubitat messages to fix New Relic timestamp display",
@@ -64,27 +65,16 @@ CHANGELOG = {
 }
 
 # Device time zone offsets (hours to add to UTC)
-# Internal devices with static IPs - use IP-based matching
+# Only Unraid needs conversion - all RFC 5424 messages pass through unchanged
 DEVICE_OFFSETS = {
-    "192.168.2.19": 5,   # HubitatC8Pro-2
-    "192.168.2.108": 5,  # HubitatC8Pro
-    "192.168.2.162": 5,  # HubitatC7
-    "192.168.2.222": 5,  # HubitatC8-2
-    "192.168.2.110": 5,  # Unraid
-    "192.168.2.113": 5,  # Home Assistant
+    "192.168.2.110": 5,  # Unraid (RFC 3164 conversion only)
 }
 
-# Hostname-based timezone offsets for external devices with dynamic IPs
-HOSTNAME_OFFSETS = {
-    "HubitatC5": 5,      # External Hubitat C5 (dynamic IP)
-    "ShoreC8": 5,        # ShoreC8 (dynamic IP)
-    # Add more external devices here as needed
-}
+# Hostname-based timezone offsets removed - all RFC 5424 messages pass through unchanged
 
-# IPs that need date stripping (Docker containers, Home Assistant, etc.)
+# IPs that need date stripping (Docker containers only)
 DATE_STRIP_IPS = [
     "192.168.2.110",  # Unraid (Docker containers: frigate, immichFrame, etc.)
-    "192.168.2.113",  # Home Assistant (all addons and core)
 ]
 
 # Global variables for status
@@ -155,25 +145,11 @@ def log_message_to_file(message_type, source_ip, message, transformed_message=No
 
 
 
-def is_hubitat_rfc5424_message(message, source_ip):
-    """Check if message is a Hubitat RFC 5424 message that should be passed through without conversion"""
-    # Check if it's RFC 5424 format (contains version "1" after priority)
+def is_rfc5424_message(message):
+    """Check if message is RFC 5424 format that should be passed through without conversion"""
+    # RFC 5424 format: <priority>1 timestamp hostname app-name ...
     rfc5424_pattern = r'<[0-9]+>1\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}'
-    if not re.search(rfc5424_pattern, message):
-        return False
-    
-    # Check if it's from a Hubitat device (IP-based or hostname-based)
-    if source_ip in DEVICE_OFFSETS:
-        return True
-    
-    # Check hostname-based matching for external devices with dynamic IPs
-    hostname_pattern = r'<[0-9]+>1\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}\s+([^\s]+)'
-    match = re.search(hostname_pattern, message)
-    if match:
-        hostname = match.group(1)
-        return hostname in HOSTNAME_OFFSETS
-    
-    return False
+    return bool(re.search(rfc5424_pattern, message))
 
 def adjust_docker_hostname(message, source_ip):
     """Transform Docker container hostnames for Unraid messages (container[ID]: -> container [ID]:)"""
@@ -194,13 +170,13 @@ def adjust_docker_hostname(message, source_ip):
     return message
 
 def strip_docker_dates(message, source_ip):
-    """Strip superfluous date information from Docker container and Home Assistant messages"""
-    # Only process messages from configured IPs
+    """Strip superfluous date information from Docker container messages (Unraid only)"""
+    # Only process messages from configured IPs (Unraid only)
     if source_ip not in DATE_STRIP_IPS:
         return message
     
     try:
-        # Process Docker container dates (Unraid)
+        # Process Docker container dates (Unraid only)
         if source_ip == "192.168.2.110":
             # Look for Docker container pattern to identify these messages
             container_pattern = r'([a-zA-Z0-9_-]+)\s*\[([0-9]+)\]:'
@@ -215,17 +191,6 @@ def strip_docker_dates(message, source_ip):
                 # Pattern 2: ImmichFrame short date format (25-08-24 08:54:24)
                 message = re.sub(r'\d{2}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\s+', '', message)
         
-        # Process Home Assistant dates (independent check)
-        if source_ip == "192.168.2.113" and "homeassistant" in message:
-            # Pattern 1: Home Assistant ISO format with milliseconds (2025-08-24 17:56:26.257)
-            message = re.sub(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}\.\d+', '', message)
-            
-            # Pattern 2: Home Assistant ISO format with comma-separated milliseconds (2025-08-24 17:57:52,121)
-            message = re.sub(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2},\d+', '', message)
-            
-            # Pattern 3: Home Assistant ISO format with colon separator (2025-08-24 17:58:37:)
-            message = re.sub(r'\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2}:', '', message)
-        
         # Clean up any double spaces that might result
         message = re.sub(r'\s+', ' ', message)
         
@@ -236,34 +201,19 @@ def strip_docker_dates(message, source_ip):
         return message
 
 def adjust_timestamp(message, source_ip):
-    """Adjust timestamp in syslog message based on source IP or hostname"""
+    """Adjust timestamp in syslog message based on source IP (Unraid only)"""
     global message_count, last_message_time
     
-    # First, check if IP is in DEVICE_OFFSETS (standard IP-based matching)
+    # Check if IP is in DEVICE_OFFSETS (Unraid only)
     if source_ip in DEVICE_OFFSETS:
         offset_hours = DEVICE_OFFSETS[source_ip]
         print(f"Using IP-based offset for {source_ip}: {offset_hours} hours")
     else:
-        # IP not found in DEVICE_OFFSETS, try hostname-based matching for external devices
-        # Extract hostname from the message for external devices with dynamic IPs
-        # Look for RFC 5424 format: <priority>1 timestamp hostname app-name ...
-        rfc5424_pattern = r'<[0-9]+>1\s+\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2}\s+([^\s]+)'
-        match = re.search(rfc5424_pattern, message)
-        if match:
-            hostname = match.group(1)
-            if hostname in HOSTNAME_OFFSETS:
-                offset_hours = HOSTNAME_OFFSETS[hostname]
-                print(f"Using hostname-based offset for {hostname} (IP: {source_ip}): {offset_hours} hours")
-            else:
-                # No hostname match found, return original message unchanged
-                print(f"No hostname match for {hostname} (IP: {source_ip}), no processing needed")
-                return message
-        else:
-            # Could not extract hostname, return original message unchanged
-            print(f"Could not extract hostname from message (IP: {source_ip}), no processing needed")
-            return message
+        # IP not found in DEVICE_OFFSETS, return original message unchanged
+        print(f"No offset configured for {source_ip}, no processing needed")
+        return message
     
-    # Try ISO 8601 format first (Hubitat format): <priority>1 YYYY-MM-DDTHH:MM:SS.mmm±HH:MM
+    # Try ISO 8601 format first: <priority>1 YYYY-MM-DDTHH:MM:SS.mmm±HH:MM
     iso_pattern = r'(<[0-9]+>1\s+)(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}[+-]\d{2}:\d{2})'
     iso_match = re.search(iso_pattern, message)
     
@@ -429,16 +379,16 @@ def relay_worker():
                 # Log incoming message
                 log_message_to_file("incoming", source_ip, message)
                 
-                # Check if this is a Hubitat RFC 5424 message that should be passed through without conversion
-                if is_hubitat_rfc5424_message(message, source_ip):
-                    # Pass through Hubitat RFC 5424 messages without conversion
+                # Check if this is an RFC 5424 message that should be passed through without conversion
+                if is_rfc5424_message(message):
+                    # Pass through all RFC 5424 messages without conversion
                     final_message = message
-                    print(f"=== HUBITAT RFC 5424 PASSTHROUGH (v{VERSION}) ===")
+                    print(f"=== RFC 5424 PASSTHROUGH (v{VERSION}) ===")
                     print(f"Original message: {message.strip()}")
                     print(f"Destination: {FORWARD_HOST}:{FORWARD_PORT}")
                     print(f"========================")
                 else:
-                    # Process other messages normally (RFC 3164 conversion)
+                    # Process RFC 3164 messages (Unraid only)
                     # Adjust timestamp if needed
                     adjusted_message = adjust_timestamp(message, source_ip)
                     

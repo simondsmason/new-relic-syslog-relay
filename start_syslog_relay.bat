@@ -1,5 +1,5 @@
 @echo off
-title Syslog Relay v1.33
-echo Starting Syslog Relay v1.33...
+title Syslog Relay v1.34
+echo Starting Syslog Relay v1.34...
 python syslog_relay_tray.py
 pause
