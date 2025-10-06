@@ -84,7 +84,7 @@ This is working as designed - no popup or console output is shown.
 **Complete Deployment Process:**
 1. **Update the code** in the working folder (iCloudDrive)
 2. **Update version number** in `syslog_relay_tray.py` (VERSION variable)
-3. **Update version number** in `start_syslog_relay.bat` (title and echo messages)
+3. **Update version number** in `start_syslog_relay.bat` (title and echo messages) ⚠️ **CRITICAL: Don't forget this step!**
 4. **Add changelog entry** for the new version in `CHANGELOG` dictionary
 5. **Commit changes to git:**
    ```powershell
